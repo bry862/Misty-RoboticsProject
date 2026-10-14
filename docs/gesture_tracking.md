@@ -8,3 +8,12 @@ index 17–20  = pinky
 
 
 python -m gesture_tracking.perception
+
+python gesture_demo.py --webcam --no-robot
+
+
+
+python gesture_demo.py --ip <misty-ip>            # the real demo, with Misty's camera
+python gesture_demo.py --ip <misty-ip> --webcam   # backup: PC webcam, Misty still reacts
+python gesture_demo.py --webcam --no-robot        # practice at home, no robot needed
+

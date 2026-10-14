@@ -4,6 +4,7 @@ Run the demo on its own with:  python -m gesture_tracking.perception
 """
 import math
 import time
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -20,10 +21,24 @@ STOP_HOLD_SEC = 0.4        # how long the pose must be held before firing
 STOP_MAX_TILT_DEG = 35     # how far from vertical the hand may lean
 STOP_MAX_MOVE = 0.15       # how far the palm may drift while held, in hand sizes
 
+# WAVE (open hand moving side to side)
+WAVE_WINDOW_SEC = 1.5      # how much palm history to keep
+WAVE_MIN_SWINGS = 2        # direction changes needed to count as a wave
+WAVE_MIN_MOVE = 0.3        # smallest move that counts as a swing, in hand sizes
+GESTURE_COOLDOWN_SEC = 2.0 # quiet time after a WAVE or COME before the same gesture can fire again
+
+# COME (hand bending toward the person and back, from the wrist)
+COME_WINDOW_SEC = 1.5      # how much reach history to keep
+COME_MIN_SWINGS = 2        # bend/straighten direction changes needed
+COME_MIN_BEND = 0.5        # smallest change in reach that counts, in palm widths
+COME_MAX_DRIFT = 1.0       # how far the palm may slide sideways meanwhile, in palm widths
+
 # Landmark indices
 WRIST = 0
+INDEX_KNUCKLE = 5
 MIDDLE_KNUCKLE = 9
 MIDDLE_TIP = 12
+PINKY_KNUCKLE = 17
 FINGERS = [(8, 6), (12, 10), (16, 14), (20, 18)]  # (tip, middle joint): index, middle, ring, pinky
 PALM = [0, 5, 9, 13, 17]                          # wrist and the four finger bases
 
@@ -57,6 +72,20 @@ def palm_center(points):
     xs = [points[i][0] for i in PALM]
     ys = [points[i][1] for i in PALM]
     return (sum(xs) / len(xs), sum(ys) / len(ys))
+
+
+def palm_width(points):
+    """Distance across the knuckles, from the index finger base to the pinky base."""
+    return math.dist(points[INDEX_KNUCKLE], points[PINKY_KNUCKLE])
+
+
+def finger_reach(points):
+    """How long the hand looks (wrist to middle fingertip), in palm widths.
+
+    Bending the hand toward the person tips the fingers away from the camera,
+    so the hand looks shorter and this number drops.
+    """
+    return math.dist(points[WRIST], points[MIDDLE_TIP]) / palm_width(points)
 
 
 def is_open_hand(points):
@@ -103,6 +132,84 @@ class StopDetector:
 
         if not self._fired and now - self._start_time >= STOP_HOLD_SEC:
             self._fired = True
+            return True
+        return False
+
+
+def count_swings(xs, min_move):
+    """Count how many times a list of values (palm x positions, finger reach) changes direction.
+
+    A move only counts once it has gone at least min_move from the last turning
+    point, so small jitter is ignored.
+    """
+    swings = 0
+    direction = 0      # +1 moving right, -1 moving left, 0 not decided yet
+    turn_x = xs[0]     # the farthest point reached in the current direction
+    for x in xs[1:]:
+        if direction == 0:
+            if abs(x - turn_x) >= min_move:
+                direction = 1 if x > turn_x else -1
+                turn_x = x
+        elif (x - turn_x) * direction > 0:
+            turn_x = x  # still going the same way: push the turning point further
+        elif abs(x - turn_x) >= min_move:
+            swings += 1  # came back far enough: that's a direction change
+            direction = -direction
+            turn_x = x
+    return swings
+
+
+class WaveDetector:
+    """Fires when an open hand swings side to side WAVE_MIN_SWINGS times."""
+
+    def __init__(self):
+        self._history = deque()     # (time, palm x) for the last WAVE_WINDOW_SEC
+        self._cooldown_until = 0.0  # no new wave can fire before this time
+
+    def update(self, points, now):
+        """Feed one frame's hand (or None). Returns True on the frame WAVE fires."""
+        if now < self._cooldown_until:
+            return False
+        if points is not None and is_open_hand(points):
+            self._history.append((now, palm_center(points)[0]))
+        while self._history and now - self._history[0][0] > WAVE_WINDOW_SEC:
+            self._history.popleft()  # forget positions older than the window
+
+        if points is None or len(self._history) < 2:
+            return False
+        xs = [x for _, x in self._history]
+        if count_swings(xs, WAVE_MIN_MOVE * hand_size(points)) >= WAVE_MIN_SWINGS:
+            self._history.clear()
+            self._cooldown_until = now + GESTURE_COOLDOWN_SEC
+            return True
+        return False
+
+
+class ComeDetector:
+    """Fires when the hand bends toward the person and back (a beckon) COME_MIN_SWINGS times."""
+
+    def __init__(self):
+        self._history = deque()     # (time, finger reach, palm x) for the last COME_WINDOW_SEC
+        self._cooldown_until = 0.0  # no new COME can fire before this time
+
+    def update(self, points, now):
+        """Feed one frame's hand (or None). Returns True on the frame COME fires."""
+        if now < self._cooldown_until:
+            return False
+        if points is not None and palm_width(points) > 0:
+            self._history.append((now, finger_reach(points), palm_center(points)[0]))
+        while self._history and now - self._history[0][0] > COME_WINDOW_SEC:
+            self._history.popleft()  # forget values older than the window
+
+        if points is None or len(self._history) < 2:
+            return False
+        xs = [x for _, _, x in self._history]
+        if max(xs) - min(xs) > COME_MAX_DRIFT * palm_width(points):
+            return False  # the palm slid sideways: that's a wave or a passing hand, not a beckon
+        reaches = [r for _, r, _ in self._history]
+        if count_swings(reaches, COME_MIN_BEND) >= COME_MIN_SWINGS:
+            self._history.clear()
+            self._cooldown_until = now + GESTURE_COOLDOWN_SEC
             return True
         return False
 
@@ -154,42 +261,88 @@ def draw_hand(frame, hand, color):
         cv2.circle(frame, (int(lm.x * width), int(lm.y * height)), 4, color, -1)
 
 
+class GesturePerception:
+    """The interface main.py uses.
+
+        p = GesturePerception(source=0, show=True)
+        event = p.poll()   # "WAVE", "STOP", "COME" or None, called once per loop
+        key = p.last_key   # key pressed in the video window, e.g. "f", or None
+        p.close()
+    """
+
+    def __init__(self, source=0, show=True, tracker=None):
+        # tracker lets tests pass in a fake camera; normally leave it as None.
+        self.show = show
+        self.last_key = None          # key pressed in the video window during the last poll()
+        self.last_event = None        # most recent gesture fired
+        self.last_event_time = None   # time.monotonic() when it fired (for latency tests)
+        self._tracker = tracker or HandTracker(source)
+        self._stop_detector = StopDetector()
+        self._wave_detector = WaveDetector()
+        self._come_detector = ComeDetector()
+
+    def poll(self):
+        """Read one frame and return "WAVE", "STOP", "COME" or None."""
+        frame, hands = self._tracker.read()
+        self.last_key = None
+        if frame is None:
+            return None
+        now = time.monotonic()
+        height, width = frame.shape[:2]
+
+        closest = pick_closest_hand(hands)
+        points = to_points(closest, width, height) if closest else None
+
+        # Run every detector each frame so each keeps its history up to date.
+        # STOP wins if several fire at once, since it is the safety gesture.
+        stop = self._stop_detector.update(points, now)
+        wave = self._wave_detector.update(points, now)
+        come = self._come_detector.update(points, now)
+        event = "STOP" if stop else "WAVE" if wave else "COME" if come else None
+        if event:
+            self.last_event, self.last_event_time = event, now
+
+        if self.show:
+            self._draw(frame, hands, closest, points, now)
+            key = cv2.waitKey(1) & 0xFF
+            if key != 0xFF:  # 0xFF means no key was pressed
+                self.last_key = chr(key)
+        return event
+
+    def _draw(self, frame, hands, closest, points, now):
+        """Show the frame with hand dots, status text and the last gesture."""
+        for hand in hands:
+            color = (0, 255, 0) if hand is closest else (160, 160, 160)
+            draw_hand(frame, hand, color)
+
+        status = f"hands: {len(hands)}"
+        if points:
+            status += f"  open: {is_open_hand(points)}  raised: {is_raised(points)}"
+            if palm_width(points) > 0:
+                status += f"  reach: {finger_reach(points):.1f}"
+        cv2.putText(frame, status + "  (q to quit)", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        if self.last_event and now - self.last_event_time < 1.0:  # keep the label up for a second
+            cv2.putText(frame, self.last_event, (10, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 4)
+        cv2.imshow("Gesture perception", frame)
+
+    def close(self):
+        """Release the camera and close the video window."""
+        self._tracker.close()
+        if self.show:
+            cv2.destroyAllWindows()
+
+
 def main():
-    tracker = HandTracker(source=0)
-    stop_detector = StopDetector()
-    last_stop_time = -10.0
+    perception = GesturePerception(source=0, show=True)
     try:
-        while True:
-            frame, hands = tracker.read()
-            if frame is None:
-                break
-            now = time.monotonic()
-            height, width = frame.shape[:2]
-
-            closest = pick_closest_hand(hands)
-            for hand in hands:
-                color = (0, 255, 0) if hand is closest else (160, 160, 160)
-                draw_hand(frame, hand, color)
-
-            points = to_points(closest, width, height) if closest else None
-            if stop_detector.update(points, now):
-                last_stop_time = now
-                print("STOP")
-
-            status = f"hands: {len(hands)}"
-            if points:
-                status += f"  open: {is_open_hand(points)}  raised: {is_raised(points)}"
-            cv2.putText(frame, status + "  (q to quit)", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            if now - last_stop_time < 1.0:  # keep the label up for a second after firing
-                cv2.putText(frame, "STOP", (10, 90),
-                            cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 4)
-            cv2.imshow("Gesture perception", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+        while perception.last_key != "q":
+            event = perception.poll()
+            if event:
+                print(event)
     finally:
-        tracker.close()
-        cv2.destroyAllWindows()
+        perception.close()
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ def greet_person(person_name):
 
     print(f"Recognized: {person_name}")
 
-    misty.say(f"Hello, {person_name}!")
+    misty.say(f"Hello, {person_name}!, how is your day going?")
 
     misty.move_head(0, 20, 0)
 

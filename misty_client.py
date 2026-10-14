@@ -49,7 +49,7 @@ class MistyClient:
 
     #Method to change face for greeting
     def display_image(self, fileName, alpha=1, layer=None, isURL=False):
-        respomse = requests.post(
+        response = requests.post(
             f"{self.base_url}/images/display", 
             json={
                 "FileName": fileName,
@@ -128,3 +128,29 @@ class MistyClient:
 
         self.socket.run_forever()
     
+
+    #Gets called automatically when Websocket opens
+    def on_open(ws):
+        print("WebSocket connected to Misty")
+
+        # Remove the previous subscription
+        unsubscribe = {
+            "Operation": "unsubscribe",
+            "EventName": "FaceRecognition"
+        }
+
+        ws.send(json.dumps(unsubscribe))
+
+        # Register the subscription again
+        subscription = {
+            "Operation": "subscribe",
+            "Type": "FaceRecognition",
+            "DebounceMs": 200,
+            "EventName": "FaceRecognition",
+            "ReturnProperty": None,
+            "EventConditions": []
+        }
+
+        ws.send(json.dumps(subscription))
+
+        self.start_face_recognition()

@@ -1,0 +1,7 @@
+mediapipe==1.1.0
+opencv-python==5.0.0.93
+numpy==2.4.6
+requests==2.34.2
+# Misty's official Python SDK (not on PyPI; the "mistyPy" there is an old 2018 version)
+Misty-SDK @ git+https://github.com/MistyCommunity/Python-SDK.git@2b7a58f63dc5c4dc89f96078c50795e9408c92ba
+websocket-client==0.57.0  # the SDK requires 0.57.0 or older

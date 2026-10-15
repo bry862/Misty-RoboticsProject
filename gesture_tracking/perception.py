@@ -3,6 +3,7 @@
 Run the demo on its own with:  python -m gesture_tracking.perception
 """
 import math
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -218,11 +219,24 @@ class ComeDetector:
 
 
 class HandTracker:
-    """Reads frames from a camera and finds the hands in each one"""
-    def __init__(self, source=0):
+    """Reads frames from a camera and finds the hands in each one.
+
+    A background thread keeps reading the camera and holds on to only the newest
+    frame. Without it, frames queue up whenever detection (or a robot command)
+    is slower than the camera, and we end up reacting to video from seconds ago.
+    """
+    def __init__(self, source=0, rotate=None):
+        # rotate: a cv2.ROTATE_* code for cameras mounted sideways (like Misty's), or None
+        self.rotate = rotate
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
             raise RuntimeError(f"Could not open video source {source!r}")
+
+        self._latest = None                       # newest frame not yet handed out
+        self._new_frame = threading.Condition()
+        self._running = True
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
 
         options = vision.HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(MODEL_PATH)),
@@ -233,15 +247,30 @@ class HandTracker:
         self.landmarker = vision.HandLandmarker.create_from_options(options)
         self._last_timestamp_ms = -1
 
+    def _read_loop(self):
+        """Background thread: read frames as fast as they arrive, keep only the newest."""
+        while self._running:
+            ok, frame = self.cap.read()
+            if not ok:
+                time.sleep(0.01)  # stream hiccup; try again
+                continue
+            with self._new_frame:
+                self._latest = frame  # replaces any frame nobody picked up (that's the point)
+                self._new_frame.notify()
+
     def read(self):
-        """Grab one frame and detect hands.
+        """Take the newest frame and detect hands.
 
         Returns (frame, hands): frame is the BGR image (None if the camera gave
-        nothing), and hands is a list of hands, each a list of 21 landmarks.
+        nothing for a second), and hands is a list of hands, each a list of 21 landmarks.
         """
-        ok, frame = self.cap.read()
-        if not ok:
+        with self._new_frame:
+            self._new_frame.wait_for(lambda: self._latest is not None, timeout=1.0)
+            frame, self._latest = self._latest, None
+        if frame is None:
             return None, []
+        if self.rotate is not None:
+            frame = cv2.rotate(frame, self.rotate)
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -253,6 +282,8 @@ class HandTracker:
         return frame, result.hand_landmarks
 
     def close(self):
+        self._running = False
+        self._reader.join(timeout=1.0)
         self.landmarker.close()
         self.cap.release()
 
@@ -273,13 +304,13 @@ class GesturePerception:
         p.close()
     """
 
-    def __init__(self, source=0, show=True, tracker=None):
+    def __init__(self, source=0, show=True, tracker=None, rotate=None):
         # tracker lets tests pass in a fake camera; normally leave it as None.
         self.show = show
         self.last_key = None          # key pressed in the video window during the last poll()
         self.last_event = None        # most recent gesture fired
         self.last_event_time = None   # time.monotonic() when it fired (for latency tests)
-        self._tracker = tracker or HandTracker(source)
+        self._tracker = tracker or HandTracker(source, rotate)
         self._stop_detector = StopDetector()
         self._wave_detector = WaveDetector()
         self._come_detector = ComeDetector()

@@ -22,9 +22,9 @@ STOP_MAX_TILT_DEG = 35     # how far from vertical the hand may lean
 STOP_MAX_MOVE = 0.15       # how far the palm may drift while held, in hand sizes
 
 # WAVE (open hand moving side to side)
-WAVE_WINDOW_SEC = 1.5      # how much palm history to keep
-WAVE_MIN_SWINGS = 2        # direction changes needed to count as a wave
-WAVE_MIN_MOVE = 0.3        # smallest move that counts as a swing, in hand sizes
+WAVE_WINDOW_SEC = 2.0      # how much palm history to keep
+WAVE_MIN_SWINGS = 3        # direction changes needed (3 = right-left-right-left; 2 let hand repositioning count)
+WAVE_MIN_MOVE = 0.4        # smallest move that counts as a swing, in hand sizes
 GESTURE_COOLDOWN_SEC = 2.0 # quiet time after a WAVE or COME before the same gesture can fire again
 
 # COME (hand bending toward the person and back, from the wrist)
@@ -145,11 +145,14 @@ def count_swings(xs, min_move):
     swings = 0
     direction = 0      # +1 moving right, -1 moving left, 0 not decided yet
     turn_x = xs[0]     # the farthest point reached in the current direction
+    low = high = xs[0] # lowest and highest values seen while direction is undecided
     for x in xs[1:]:
         if direction == 0:
-            if abs(x - turn_x) >= min_move:
-                direction = 1 if x > turn_x else -1
-                turn_x = x
+            low, high = min(low, x), max(high, x)
+            if x - low >= min_move:
+                direction, turn_x = 1, x
+            elif high - x >= min_move:
+                direction, turn_x = -1, x
         elif (x - turn_x) * direction > 0:
             turn_x = x  # still going the same way: push the turning point further
         elif abs(x - turn_x) >= min_move:

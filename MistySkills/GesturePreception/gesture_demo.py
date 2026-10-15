@@ -56,7 +56,7 @@ def greet(misty):
     """WAVE: green LED, raise the right arm and say hi; the arm lowers after 2 s."""
     check(misty.change_led(red=0, green=255, blue=0))
     check(misty.move_arms(rightArmPosition=ARM_UP, rightArmVelocity=80))
-    check(misty.speak(text="Hi there!"))
+    check(misty.speak(text="Hi! I'm Misty! How are you doing today?"))
     threading.Timer(2.0, lambda: misty.move_arms(rightArmPosition=ARM_DOWN, rightArmVelocity=50)).start()
 
 

@@ -45,6 +45,17 @@ def beckoning(t):
     return fake_hand(bend=0.7 + 0.3 * math.cos(2 * math.pi * 1.5 * t))
 
 
+def moving_through(*keyframes):
+    """A hand that slides smoothly between (time, dx) keyframes, then stays put."""
+    def hand_at(t):
+        for (t0, x0), (t1, x1) in zip(keyframes, keyframes[1:]):
+            if t0 <= t <= t1:
+                f = (1 - math.cos(math.pi * (t - t0) / (t1 - t0))) / 2  # ease in and out
+                return fake_hand(dx=x0 + (x1 - x0) * f)
+        return fake_hand(dx=keyframes[-1][1])
+    return hand_at
+
+
 def run_detector(detector, hand_at, seconds):
     """Feed a detector one frame at a time; return the times (s) it fired."""
     fired = []
@@ -160,6 +171,23 @@ class TestWave(unittest.TestCase):
     def test_hand_passing_through_does_not_fire(self):
         sliding = lambda t: fake_hand(dx=-200 + 150 * t)
         self.assertEqual(run_detector(p.WaveDetector(), sliding, 3), [])
+
+    def test_repositioning_hand_does_not_fire(self):
+        # Move to a new spot, overshoot, settle back, small adjustment (found on the robot)
+        reposition = moving_through((0, 0), (0.3, 100), (0.5, 60), (0.7, 95), (1.0, 95))
+        self.assertEqual(run_detector(p.WaveDetector(), reposition, 3), [])
+
+    def test_small_adjustments_do_not_fire(self):
+        adjusting = moving_through((0, 0), (0.25, 40), (0.5, 0), (0.75, 40), (1.0, 40))
+        self.assertEqual(run_detector(p.WaveDetector(), adjusting, 3), [])
+
+    def test_slow_wave_fires(self):
+        slow = lambda t: fake_hand(dx=60 * math.sin(2 * math.pi * 1.0 * t))
+        self.assertEqual(len(run_detector(p.WaveDetector(), slow, 2)), 1)
+
+    def test_small_wave_fires(self):
+        small = lambda t: fake_hand(dx=40 * math.sin(2 * math.pi * 1.5 * t))
+        self.assertEqual(len(run_detector(p.WaveDetector(), small, 2)), 1)
 
 
 class TestCome(unittest.TestCase):

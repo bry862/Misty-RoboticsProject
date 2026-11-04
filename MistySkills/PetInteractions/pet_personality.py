@@ -6,20 +6,59 @@ class PetPersonality:
         #Min seconds between reactions
         self.cooldown = cooldown
         self.last_reaction = 0
-
+        self.head_pat_count = 0
+  
         #Possible reactions to being petted
         self.reactions = {
             "head": [
-                "That feels nice!",
-                "I love head pats!",
-                "You're my favorite human!"
+                {
+                    "message": "That feels nice!",
+                    "emotion": "happy",
+                    "action": "hug"
+                },
+                {
+                    "message": "I love head pats!",
+                    "emotion": "happy",
+                    "action": "love"
+                },
+                {
+                    "message": "You are spoiling me!",
+                    "emotion": "playful",
+                    "action": "cute"
+                },
+                {
+                    "message": "You're my favorite human!",
+                    "emotion": "happy",
+                    "action": "admire"
+                },
+
             ],
             "chin": [
-                "Oh, hello there!",
-                "That tickles!",
-                "Are we playing?"
+                {
+                    "message": "Oh, hello there!",
+                    "emotion": "curious",
+                    "action": "admire2"
+                },
+                {
+                    "message": "Oh, more attention for me?",
+                    "emotion": "playful",
+                    "action": "cute"
+                },
+                {
+                    "message": "Ooh, what's that?",
+                    "emotion": "curious",
+                    "action": "surprise"
+                },
+                {
+                    "message": "Hey! That tickles!",
+                    "emotion": "playful",
+                    "action": "surprise2"
+                }
             ]
         }
+
+        self.last_reaction_message = None
+
 
     def react_to_touch(self, location):
         #Stop Misty from reacting too often
@@ -32,16 +71,41 @@ class PetPersonality:
         if location not in self.reactions:
             return None
 
-        #Random response
-        message = random.choice(self.reactions[location])
+        
+        # Count head pats and trigger excitement every third pat
+        if location == "head":
+            self.head_pat_count += 1
 
+            if self.head_pat_count >= 3:
+                self.head_pat_count = 0
+                self.last_reaction = current_time
+                self.last_reaction_message = "You're making me so happy!"
+
+                return {
+                    "location": "head",
+                    "message": "You're making me so happy!",
+                    "emotion": "excited",
+                    "action": "walk-happy"
+                }
+
+        
+        #Don't repeat the same reaction twice in a row
+        available = [
+            reaction for reaction in self.reactions[location]
+            if reaction["message"] != self.last_reaction_message
+        ]
+
+        reaction = random.choice(available)
+        self.last_reaction_message = reaction["message"]
         self.last_reaction = current_time
+
 
         return {
             "location": location,
-            "message": message,
-            "emotion": "happy" if location == "head" else "curious"
-        }
+            "message": reaction["message"],
+            "emotion": reaction["emotion"],
+            "action": reaction["action"]
+        }        
 
 if __name__ == "__main__":
     pet = PetPersonality()

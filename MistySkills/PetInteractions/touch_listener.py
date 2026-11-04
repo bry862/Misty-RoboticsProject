@@ -8,19 +8,30 @@ from pet_controller import PetController
 class TouchListener:
     def __init__(self, controller):
         self.controller = controller
+        self.active_sensors = set()
 
+    
     def handle_sensor(self, sensor, is_contacted):
-        #Only react when a sensor is being touched
+        sensor = sensor.lower()
+
+        #Remember when a sensor is released
         if not is_contacted:
+            self.active_sensors.discard(sensor)
             return
 
-        sensor = sensor.lower()
+        #Ignore repeated contact events from the same sensor
+        if sensor in self.active_sensors:
+            return
+
+        #Mark this sensor as touched
+        self.active_sensors.add(sensor)
 
         if "chin" in sensor:
             self.controller.handle_touch("chin")
         elif any(part in sensor for part in
                  ("head", "front", "back", "left", "right", "scruff")):
             self.controller.handle_touch("head")
+
 
     def on_message(self, ws, message):
         data = json.loads(message)

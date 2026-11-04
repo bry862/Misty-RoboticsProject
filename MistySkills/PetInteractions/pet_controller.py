@@ -1,4 +1,6 @@
 from pet_personality import PetPersonality
+import time
+import requests
 
 class PetController:
     def __init__(self, misty=None):
@@ -30,6 +32,27 @@ class PetController:
         elif reaction["emotion"] == "curious":
             self.misty.display_image("e_Admiration.jpg")
             self.misty.move_head(0, 15, 0, 40)
+        
+        elif reaction["emotion"] == "excited":
+            response = requests.post(
+                f"{self.misty.base_url}/actions/start",
+                json={"Name": "walk-happy"},
+                timeout=10
+            )
+            response.raise_for_status()
+            print("Happy dance triggered!")
+
+            #Dance finishes --> reset body to neutral
+            time.sleep(2)
+
+            response = requests.post(
+                f"{self.misty.base_url}/actions/start",
+                json={"Name": "body-reset"},
+                timeout=5
+            )
+            response.raise_for_status()
+            print("Misty returned to neutral!")
+  
 
 
 if __name__ == "__main__":

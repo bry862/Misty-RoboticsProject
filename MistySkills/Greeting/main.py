@@ -14,10 +14,14 @@ from misty_client import MistyClient
 # Config (tune these on the real robot)
 # ---------------------------------------------------------------------------
 DB_FILE = "known_faces.pkl"
-MATCH_THRESHOLD = 0.45          # cosine similarity needed to call it a known face
-MIN_ENROLL_DET_SCORE = 0.6      # don't enroll low-quality detections
 
-TRACKING_DISTANCE_THRESHOLD_CM = 150.0
+
+MATCH_THRESHOLD = 0.45          # cosine similarity needed to call it a known face
+ENROLL_BELOW = 0.30             # only enroll if the best score is clearly a stranger
+MIN_ENROLL_DET_SCORE = 0.7      # don't enroll low-quality detections
+MIN_ENROLL_FACE_PX = 90         # bbox width; skip tiny, far-away faces
+
+TRACKING_DISTANCE_THRESHOLD_CM = 100.0
 KNOWN_WIDTH_CM = 15.0
 FOCAL_LENGTH_PIXELS_640 = 600.0  # calibrated for a 640px-wide frame; scaled below
 
@@ -123,7 +127,9 @@ def identify_or_enroll(face, distance_cm):
         if best_match != last_recognized["name"]:
             print(f"Recognized: {best_match} (Score: {highest_score:.2f}) | Distance: {distance_cm:.1f} cm")
             last_recognized["name"] = best_match
-    elif face.det_score >= MIN_ENROLL_DET_SCORE:
+    elif (highest_score < ENROLL_BELOW
+      and face.det_score >= MIN_ENROLL_DET_SCORE
+      and (face.bbox[2] - face.bbox[0]) >= MIN_ENROLL_FACE_PX):
         new_id = f"Guest_{len(known_faces) + 1}"
         known_faces[new_id] = face.embedding
         save_database()
@@ -277,3 +283,11 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nShutting down and stopping face recognition...")
         client.stop_face_recognition()
+
+# # ## To do's: 
+# 1. Re center head when no one is detected
+# 2. Aside from only registering faces that are accurate enough, 
+# we need to only register if it within the threshold. 
+
+# 3. Running main positions Misty's head up slightly, 
+# sincne it will be on the floor most of the time.  

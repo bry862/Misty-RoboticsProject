@@ -5,3 +5,6 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+
+# Editor settings (each person's VS Code setup is different)
+.vscode/

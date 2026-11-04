@@ -32,13 +32,13 @@ DEG_PER_PIXEL = 0.11
 GAIN = 1.0                      # fraction of the measured error corrected per move (lower if it overshoots)
 
 # Anti-jitter settings
-START_MOVING_PX = 45            # centered -> must be off-center by this much to start moving
+START_MOVING_PX = 30           # centered -> must be off-center by this much to start moving
 STOP_MOVING_PX = 20             # while moving, keep correcting until within this many px
 MIN_MOVE_DEG = 1.0              # ignore corrections smaller than this
-MAX_STEP_DEG = 15.0             # cap how far one update can move the head
+MAX_STEP_DEG = 25.0            # cap how far one update can move the head
 
-SETTLE_SECONDS = 0.6            # ignore events after a move (picture capture adds ~0.9s on top)
-HEAD_VELOCITY = 80              # NOTE: misty_client.move_head_safely clamps this; see its safe_vel line
+SETTLE_SECONDS = 0.3           # ignore events after a move (picture capture adds ~0.9s on top)
+HEAD_VELOCITY = 100             # NOTE: misty_client.move_head_safely clamps this; see its safe_vel line
 
 # If the head moves the wrong way, flip these
 YAW_SIGN = -1.0                 # face right of center -> negative yaw delta

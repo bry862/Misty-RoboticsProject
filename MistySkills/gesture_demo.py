@@ -7,13 +7,13 @@ Hand gestures (seen by the camera):
     COME    -> Misty drives slowly forward for 5 seconds, slowly lifting her head to look up at you
     GO_AWAY -> Misty backs up for 3 seconds, slowly lowering her head like a shy pet
 
-Pet interactions (Misty's touch sensors, see ../PetInteractions):
+Pet interactions (Misty's touch sensors, see ./PetInteractions):
     Head pat -> happy/playful reaction (says something, plays an action like "hug" or "love")
     Chin pat -> curious/playful reaction ("surprise", "admire", ...)
     Every 3rd head pat -> excited: "walk-happy" dance, then back to neutral
     Misty ignores touches for 3 s after reacting.
 
-Uses Misty's official Python SDK (mistyPy). Run from the project folder:
+Uses Misty's official Python SDK (mistyPy). Run from the MistySkills folder:
     python gesture_demo.py --ip 192.168.1.5
 """
 import argparse
@@ -29,10 +29,11 @@ import requests
 from mistyPy.Events import Events
 from mistyPy.Robot import Robot
 
+# Reuse the gesture code from ./GesturePreception and the pet logic from ./PetInteractions
+SKILLS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SKILLS_DIR / "GesturePreception"))
+sys.path.insert(0, str(SKILLS_DIR / "PetInteractions"))
 from gesture_tracking.perception import GesturePerception
-
-# Reuse the pet interaction logic from ../PetInteractions
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "PetInteractions"))
 from pet_personality import PetPersonality 
 from touch_listener import TouchListener 
 

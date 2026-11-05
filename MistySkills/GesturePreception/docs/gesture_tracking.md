@@ -9,6 +9,7 @@ index 17–20  = pinky
 
 python -m gesture_tracking.perception
 
+gesture_demo.py is in the MistySkills folder (cd .. from GesturePreception):
 python gesture_demo.py --webcam --no-robot
 
 

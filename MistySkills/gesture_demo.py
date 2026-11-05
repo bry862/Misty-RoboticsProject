@@ -4,14 +4,15 @@ Misty reacts to hand gestures and to being petted.
 Hand gestures (seen by the camera):
     STOP    -> Misty stops driving and freezes her head (also cuts a COME short, but not a GO_AWAY)
     WAVE    -> Misty greets (green LED, raises an arm, says hi)
-    COME    -> Misty drives slowly forward for 5 seconds, keeping eye contact with your face
-               (or, if she can't see a face, slowly lifting her head to look up at you)
+    COME    -> Misty drives toward your face, turning to keep it ahead of her, and stops
+               50 cm away (or, if she can't see a face, drives forward for 5 seconds,
+               slowly lifting her head to look up at you)
     GO_AWAY -> Misty backs up for 1 second, says goodbye and turns around (180 degrees)
 
 Face tracking (see ./Greeting/face_tracking.py):
     Misty turns her head toward the closest face within 1 m, and remembers new faces.
-    During COME she follows your face at any distance. It pauses while STOP or GO_AWAY moves
-    her head. Needs insightface; turn off with --no-faces.
+    During COME she follows your face at any distance. It pauses after STOP and during
+    GO_AWAY. Needs insightface; turn off with --no-faces.
 
 Pet interactions (Misty's touch sensors, see ./PetInteractions):
     Head pat -> happy/playful reaction (says something, plays an action like "hug" or "love")
@@ -61,7 +62,16 @@ HEAD_LEVEL = 0
 HEAD_UP = -25 
 STOP_FREEZE_SEC = 3.0   # after STOP, face tracking leaves the head still this long
 FACE_CHECK_SEC = 0.2    # pause between face checks, so gesture detection keeps enough CPU
-FACE_SEEN_SEC = 1.5     # COME keeps eye contact if a face was seen this recently, else uses the fixed head lift
+FACE_SEEN_SEC = 1.5     # COME follows the face if it was seen this recently, else uses the fixed drive and head lift
+
+# --- Following the person during COME ---
+SAFE_DISTANCE_CM = 50   # Misty stops this far from the person's face
+SLOW_DOWN_CM = 50       # she starts slowing down this much before the safe distance
+FOLLOW_MIN_SPEED = 5    # slowest she drives while still approaching
+FOLLOW_MAX_SEC = 10     # she gives up following after this long
+FOLLOW_DRIVE_MS = 1500  # each drive command lasts this long, so she stops by herself if updates stop coming
+FOLLOW_TURN_GAIN = 1.0  # turning speed (% of max) per degree the face is off to the side
+FOLLOW_MAX_TURN = 30    # fastest she turns toward the face (% of max)
 REQUEST_TIMEOUT_SEC = 3
 
 
@@ -118,11 +128,10 @@ def cancel_turn():
         turn_timer = None
 
 
-def come_forward(misty, lift_head=True):
-    """lift_head=False when face tracking keeps eye contact"""
+def come_forward(misty):
+    """COME when Misty can't see a face: drive forward for a fixed time, slowly lifting her head."""
     check(misty.change_led(red=0, green=0, blue=255))
-    if lift_head:
-        move_head(misty, HEAD_UP, COME_TIME_MS / 1000)
+    move_head(misty, HEAD_UP, COME_TIME_MS / 1000)
     check(misty.drive_time(linearVelocity=COME_SPEED, angularVelocity=0, timeMs=COME_TIME_MS))
 
 
@@ -163,7 +172,8 @@ def load_face_tracking():
 
 
 class FaceFollower:
-    """Turns Misty's head toward the closest face (Greeting/face_tracking.py).
+    """Turns Misty's head toward the closest face (Greeting/face_tracking.py), and
+    during COME drives her toward that face, stopping SAFE_DISTANCE_CM away.
 
     Uses the same camera frames as gesture detection, because Misty can't stream
     video and take pictures at the same time
@@ -175,22 +185,23 @@ class FaceFollower:
         self.face_tracking = face_tracking
         self.recognizer = face_tracking.FaceRecognizer()
         self.head = face_tracking.HeadController()
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()   # held while sending drive commands, so STOP always comes after them
         self.paused_until = 0.0
-        self.any_distance_until = 0.0  # until then, follow faces farther than 1 m too (during COME)
+        self.following_until = 0.0     # during COME: drive toward the face until then
+        self.follow_finished = False   # set when following ends by itself (reached the person, lost them, too long)
         self.last_face_time = 0.0      # when a face was last seen, at any distance
         self.running = True
         self.thread = threading.Thread(target=self.loop, daemon=True)
         self.thread.start()
 
     def pause(self, seconds, yaw=None, pitch=None):
-        """Leave the head to a gesture reaction for a while.
+        """Leave the head to a gesture reaction for a while (also ends following).
 
         yaw/pitch: where the reaction leaves the head, so tracking continues from there.
         """
         with self.lock:
             self.paused_until = time.monotonic() + seconds
-            self.any_distance_until = 0.0
+            self.following_until = 0.0
             if pitch is not None:
                 self.head.reset(yaw=yaw, pitch=pitch)
 
@@ -198,11 +209,39 @@ class FaceFollower:
         """True if a face was seen in the last FACE_SEEN_SEC seconds."""
         return time.monotonic() - self.last_face_time < FACE_SEEN_SEC
 
-    def keep_eye_contact(self, seconds):
-        """Follow the face for a while even if it's farther than 1 m (Misty is driving to it)."""
+    def following(self):
+        return time.monotonic() < self.following_until
+
+    def start_following(self):
+        """COME: drive toward the face and stop SAFE_DISTANCE_CM away from it.
+        The body turns toward the face, so the head looks straight ahead (yaw 0) and only tilts."""
         with self.lock:
             self.paused_until = 0.0
-            self.any_distance_until = time.monotonic() + seconds
+            self.follow_finished = False
+            self.following_until = time.monotonic() + FOLLOW_MAX_SEC
+            self.head.reset(yaw=0, pitch=self.head.pitch)
+            check(self.misty.move_head(pitch=self.head.pitch, roll=0, yaw=0,
+                                       velocity=self.face_tracking.HEAD_VELOCITY, units="degrees"))
+
+    def stop_following(self, reason):
+        """End COME and stop driving. Call with self.lock held."""
+        self.following_until = 0.0
+        self.follow_finished = True
+        print(f"COME finished: {reason}")
+        check(self.misty.stop())
+
+    def drive_toward(self, target, distance_cm, frame_w):
+        """One step of following: steer toward the face, slow down near it. Call with self.lock held."""
+        if distance_cm <= SAFE_DISTANCE_CM:
+            self.stop_following(f"reached you ({distance_cm:.0f} cm away)")
+            return
+        error_x = (target.bbox[0] + target.bbox[2]) / 2 - frame_w / 2
+        side_deg = self.face_tracking.YAW_SIGN * error_x * self.face_tracking.DEG_PER_PIXEL  # + = face is to her left
+        turn = max(-FOLLOW_MAX_TURN, min(FOLLOW_MAX_TURN, FOLLOW_TURN_GAIN * side_deg))
+        speed = COME_SPEED * min(1.0, (distance_cm - SAFE_DISTANCE_CM) / SLOW_DOWN_CM)
+        speed = max(FOLLOW_MIN_SPEED, speed)
+        check(self.misty.drive_time(linearVelocity=round(speed), angularVelocity=round(turn),
+                                    timeMs=FOLLOW_DRIVE_MS))
 
     def loop(self):
         face_tracking = self.face_tracking
@@ -216,17 +255,29 @@ class FaceFollower:
             except Exception as error:
                 print(f"  Face tracking error: {error}")
                 continue
-            if not target:
-                continue
-            self.last_face_time = time.monotonic()
-            any_distance = time.monotonic() < self.any_distance_until
-            if not 0 < distance_cm or (distance_cm > face_tracking.TRACKING_DISTANCE_THRESHOLD_CM
-                                       and not any_distance):
-                continue
-            with self.lock:
-                if time.monotonic() < self.paused_until:
-                    continue  # a gesture reaction started while we were looking
-                command = self.head.compute(target.bbox, frame.shape[1], frame.shape[0])
+            command = None
+            try:
+                with self.lock:
+                    now = time.monotonic()
+                    if now < self.paused_until:
+                        continue  # a gesture reaction started while we were looking
+                    if target:
+                        self.last_face_time = now
+                    if 0 < self.following_until <= now:
+                        self.stop_following(f"gave up after {FOLLOW_MAX_SEC} s")
+                    elif self.following() and not self.sees_face():
+                        self.stop_following("lost sight of your face")
+                    following = self.following()
+                    close_enough = 0 < distance_cm <= face_tracking.TRACKING_DISTANCE_THRESHOLD_CM
+                    if target and (following or close_enough):
+                        if following:
+                            self.drive_toward(target, distance_cm, frame.shape[1])
+                        command = self.head.compute(target.bbox, frame.shape[1], frame.shape[0])
+                        if command and self.following():
+                            self.head.yaw = 0  # the body does the turning; the head only tilts
+                            command = (0, command[1])
+            except requests.RequestException as error:
+                print(f"  Misty didn't respond: {error}")
             if command is None:
                 continue
             yaw, pitch = command
@@ -246,11 +297,16 @@ class MoveInProgress:
     """Remembers the STOP / COME / GO_AWAY Misty is still doing, so a WAVE can't interrupt it.
     GO_AWAY always finishes: a STOP during it is ignored too."""
 
-    MOVE_SEC = {"STOP": STOP_FREEZE_SEC, "COME": COME_TIME_MS / 1000, "GO_AWAY": GO_AWAY_TIME_MS / 1000}
+    MOVE_SEC = {"STOP": STOP_FREEZE_SEC, "COME": FOLLOW_MAX_SEC, "GO_AWAY": GO_AWAY_TIME_MS / 1000}
 
     def __init__(self):
         self.move = None
         self.until = 0.0
+
+    def end(self, move, now, after=0.0):
+        """The move turned out shorter (e.g. COME reached the person): it ends `after` seconds from now."""
+        if self.move == move:
+            self.until = now + after
 
     def allows(self, event, now):
         """Return False if this gesture must be ignored right now.
@@ -267,17 +323,17 @@ class MoveInProgress:
 
 
 def react(misty, event, follower=None):
-    """Send Misty the reaction for one gesture."""
+    """Send Misty the reaction for one gesture. Returns True if COME is following the person's face."""
     if event in ("STOP", "COME", "GO_AWAY"):
         cancel_turn()
-    eye_contact = event == "COME" and follower is not None and follower.sees_face()
+    follow = event == "COME" and follower is not None and follower.sees_face()
     if follower:
         # Gesture reactions move the head, so face tracking waits until they're done.
-        # Except COME: if Misty sees the person's face, she keeps looking at it while driving.
+        # Except COME: if Misty sees the person's face, she drives toward it, stopping at a safe distance.
         if event == "STOP":
             follower.pause(STOP_FREEZE_SEC)
-        elif eye_contact:
-            follower.keep_eye_contact(COME_TIME_MS / 1000)
+        elif follow:
+            follower.start_following()
         elif event == "COME":
             follower.pause(COME_TIME_MS / 1000, yaw=0, pitch=HEAD_UP)
         elif event == "GO_AWAY":
@@ -287,10 +343,13 @@ def react(misty, event, follower=None):
         check(misty.halt())  # also stops the head mid-tilt
     elif event == "WAVE":
         greet(misty)
+    elif event == "COME" and follow:
+        check(misty.change_led(red=0, green=0, blue=255))  # the follower does the driving
     elif event == "COME":
-        come_forward(misty, lift_head=not eye_contact)
+        come_forward(misty)
     elif event == "GO_AWAY":
         go_away(misty)
+    return follow
 
 
 class PetReactions:
@@ -399,6 +458,9 @@ def main():
     try:
         while perception.last_key != "q":
             event = perception.poll()
+            if follower and follower.follow_finished:
+                follower.follow_finished = False
+                in_progress.end("COME", time.monotonic())  # she reached you early, so WAVE works again
             if perception.last_key == "h":
                 pet.handle_touch("head")
             elif perception.last_key == "c":
@@ -411,7 +473,9 @@ def main():
             print(event)
             if misty:
                 try:
-                    react(misty, event, follower)
+                    following = react(misty, event, follower)
+                    if event == "COME" and not following:
+                        in_progress.end("COME", time.monotonic(), COME_TIME_MS / 1000)  # the fixed drive is shorter
                 except requests.RequestException as error:
                     print(f"  Misty didn't respond: {error}")  # keep going, don't crash the demo
     finally:

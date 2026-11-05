@@ -76,8 +76,8 @@ Any state can move to `STOPPED` when the raised-palm gesture or a safety sensor 
 |------------|-------|
 | 1 (Oct 15) | Face detection and head tracking, pet reactions, wave and stop gestures, safety stop |
 | 2 (Nov 5) | COME and GO_AWAY gestures, eye contact while Misty drives toward a person, goodbye and turn-around on GO_AWAY, face tracking and gestures on one camera stream |
-| 3 (Nov 24) | Stopping at a safe distance from the person, user testing with Hunter students, refined reactions, responsible-design review |
-| Final | Mapping and navigation, integrated companion behavior and full evaluation |
+| 3 (Nov 24) | Find and implement a navigation algorithm, stopping at a safe distance from the person, refined reactions, responsible-design review |
+| Final | User testing with Hunter students, integrated companion behavior and full evaluation |
 
 
 ## Setup and Running

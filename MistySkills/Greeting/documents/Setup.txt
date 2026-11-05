@@ -1,0 +1,24 @@
+## Setup
+
+python3.11 -m venv venv
+
+source venv/bin/activate (- You need a python enviroment)       
+    # Windows: venv\Scripts\activate
+
+pip install -r requirements.txt
+
+
+python main.py
+
+
+Plain instructions
+
+Run Setup.sh. It should set up the 
+python env and install requirements.txt
+
+Note: main.py takes saves an image locally of the first face it sees, for debbugin purposes. 
+
+
+
+
+

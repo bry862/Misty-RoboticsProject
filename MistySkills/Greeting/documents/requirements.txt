@@ -1,0 +1,6 @@
+# requirements.txt
+Misty-SDK @ git+https://github.com/MistyCommunity/Python-SDK.git@2b7a58f63dc5c4dc89f96078c50795e9408c92ba
+opencv-python
+numpy
+insightface
+onnxruntime

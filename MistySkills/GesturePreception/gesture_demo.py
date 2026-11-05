@@ -1,24 +1,40 @@
-"""Checkpoint 1 demo: Misty reacts to hand gestures.
+"""Checkpoint 2 demo: 
+Misty reacts to hand gestures and to being petted.
 
+Hand gestures (seen by the camera):
     STOP    -> Misty stops driving and freezes her head (also cuts a COME or GO_AWAY short)
     WAVE    -> Misty greets (green LED, raises an arm, says hi)
     COME    -> Misty drives slowly forward for 5 seconds, slowly lifting her head to look up at you
     GO_AWAY -> Misty backs up for 3 seconds, slowly lowering her head like a shy pet
+
+Pet interactions (Misty's touch sensors, see ../PetInteractions):
+    Head pat -> happy/playful reaction (says something, plays an action like "hug" or "love")
+    Chin pat -> curious/playful reaction ("surprise", "admire", ...)
+    Every 3rd head pat -> excited: "walk-happy" dance, then back to neutral
+    Misty ignores touches for 3 s after reacting.
 
 Uses Misty's official Python SDK (mistyPy). Run from the project folder:
     python gesture_demo.py --ip 192.168.1.5
 """
 import argparse
 import os
+import sys
 import threading
 import time
+from pathlib import Path
 
 import cv2
 import mistyPy.RobotCommands
 import requests
+from mistyPy.Events import Events
 from mistyPy.Robot import Robot
 
 from gesture_tracking.perception import GesturePerception
+
+# Reuse the pet interaction logic from ../PetInteractions
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "PetInteractions"))
+from pet_personality import PetPersonality 
+from touch_listener import TouchListener 
 
 # --- Reaction settings ---> we can change these ones
 VIDEO_PORT = 1936
@@ -27,14 +43,24 @@ CAMERA_ROTATION = cv2.ROTATE_90_CLOCKWISE
 COME_SPEED = 20
 COME_TIME_MS = 5000
 GO_AWAY_SPEED = 15
-GO_AWAY_TIME_MS = 3000
+GO_AWAY_TIME_MS = 5000
 ARM_UP, ARM_DOWN = -80, 90
 
-HEAD_LEVEL = 0              # looking straight ahead
-HEAD_UP = -25               # looking up at the face of someone standing close
-HEAD_DOWN = 15              # looking down, shy, while backing away
-HEAD_RESET_SEC = 2.0        # how long the head takes to come back level after GO_AWAY
-REQUEST_TIMEOUT_SEC = 3     # give up on a command if Misty doesn't answer in time
+HEAD_LEVEL = 0 
+HEAD_UP = -25 
+HEAD_DOWN = 15
+HEAD_RESET_SEC = 2.0
+REQUEST_TIMEOUT_SEC = 3
+
+
+# --- Pet reaction settings ---
+PET_LED_COLORS = {          # LED color per emotion, (red, green, blue)
+    "happy": (255, 105, 180),
+    "playful": (255, 140, 0),
+    "curious": (255, 255, 0),
+    "excited": (160, 32, 240),
+}
+EXCITED_DANCE_SEC = 2.0     # how long "walk-happy" plays before Misty resets to neutral
 
 
 def request_with_timeout(verb, url, **kwargs):
@@ -111,12 +137,50 @@ def react(misty, event):
         go_away(misty)
 
 
-def start_video_stream(misty):
-    """Start streaming Misty's camera and return the address to read it from.
+class PetReactions:
+    """Pet interactions: picks a reaction with PetPersonality and plays it on Misty.
 
-    Turning on AV streaming switches off Misty's normal camera service
-    (the two can't run at the same time).
+    Has a handle_touch(location) method so TouchListener can drive it directly.
     """
+
+    def __init__(self, misty):
+        self.misty = misty                # None = only print reactions
+        self.personality = PetPersonality()
+
+    def handle_touch(self, location):
+        reaction = self.personality.react_to_touch(location)
+        if reaction is None:
+            return  # still cooling down from the last reaction
+        print(f"PET {location}: {reaction['emotion']} -> \"{reaction['message']}\" ({reaction['action']})")
+        if self.misty:
+            try:
+                self.play(reaction)
+            except requests.RequestException as error:
+                print(f"  Misty didn't respond: {error}")
+
+    def play(self, reaction):
+        check(self.misty.change_led(*PET_LED_COLORS.get(reaction["emotion"], (255, 255, 255))))
+        check(self.misty.speak(text=reaction["message"]))
+        check(self.misty.start_action(name=reaction["action"]))
+        if reaction["emotion"] == "excited":
+            # After the happy dance, put back to neutral pose
+            threading.Timer(EXCITED_DANCE_SEC, lambda: self.misty.start_action(name="body-reset")).start()
+
+
+def start_touch_sensors(misty, pet):
+    """Listen to Misty's touch sensors and send head/chin pats to the pet reactions."""
+    listener = TouchListener(pet)
+
+    def on_touch(data):
+        event = data.get("message", {})
+        if isinstance(event, dict):
+            listener.handle_sensor(event.get("sensorPosition", ""), event.get("isContacted", False))
+
+    misty.register_event(event_type=Events.TouchSensor, event_name="PetTouch", debounce=200, keep_alive=True, callback_function=on_touch)
+
+
+def start_video_stream(misty):
+    """Start streaming Misty's camera and return the address to read it from"""
     check(misty.enable_av_streaming_service())
     check(misty.start_av_streaming(url=f"rtspd:{VIDEO_PORT}", width=VIDEO_WIDTH, height=VIDEO_HEIGHT))
     return f"rtsp://{misty.ip}:{VIDEO_PORT}"
@@ -161,11 +225,20 @@ def main():
         print("Starting Misty's camera stream...")
         source = start_video_stream(misty)
 
+    pet = PetReactions(misty)
+    if misty:
+        start_touch_sensors(misty, pet)
+
     perception = open_perception(source, rotate=None if args.webcam else CAMERA_ROTATION)
-    print("Ready. Show a gesture: STOP, WAVE, COME or GO_AWAY. Press q in the video window to quit.")
+    print("Ready. Show a gesture (STOP, WAVE, COME, GO_AWAY) or pet Misty's head/chin.")
+    print("Keys in the video window: h = head pat, c = chin pat, q = quit.")
     try:
         while perception.last_key != "q":
             event = perception.poll()
+            if perception.last_key == "h":
+                pet.handle_touch("head")
+            elif perception.last_key == "c":
+                pet.handle_touch("chin")
             if not event:
                 continue
             print(event)
@@ -179,6 +252,7 @@ def main():
         cancel_head_reset()
         if misty:
             try:
+                misty.unregister_event("PetTouch")
                 misty.stop()  # never leave Misty driving
                 if not args.webcam:
                     stop_video_stream(misty)

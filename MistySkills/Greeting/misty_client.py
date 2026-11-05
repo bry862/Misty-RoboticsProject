@@ -62,6 +62,10 @@ class MistyClient:
             keep_alive=True,
         )
 
+    def stop_object_detection(self):
+        self.robot.stop_object_detector()
+        self.robot.unregister_event("ObjectDetectionEvent")
+
         # ---------- Driving ----------
     
     
@@ -86,7 +90,6 @@ class MistyClient:
         """Safe cleanup: stop motion and tear down events."""
         self.stop()
         for stopper in (self.stop_object_detection,
-                        self.stop_head_position_tracking,
                         self.stop_face_recognition):
             try:
                 stopper()

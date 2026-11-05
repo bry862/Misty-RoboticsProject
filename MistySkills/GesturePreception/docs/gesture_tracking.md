@@ -13,6 +13,7 @@ gesture_demo.py is in the MistySkills folder (cd .. from GesturePreception):
 python gesture_demo.py --webcam --no-robot
 
 
+pip install -r requirements.txt
 
 
 python gesture_demo.py --ip <misty-ip>            # the real demo, with Misty's camera
@@ -20,5 +21,6 @@ python gesture_demo.py --ip <misty-ip> --webcam   # backup: PC webcam, Misty sti
 
 To run: 
 source .venv/bin/activate
-python gesture_demo.py --ip 192.168.1.5
+python gesture_demo.py --ip <misty-ip>
+
 

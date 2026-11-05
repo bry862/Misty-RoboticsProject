@@ -336,6 +336,11 @@ class TestGoAway(unittest.TestCase):
 
 
 class TestGesturePerception(unittest.TestCase):
+    def test_keeps_a_clean_copy_of_the_frame(self):
+        perception, _ = run_perception(lambda t: [], 0.1)
+        self.assertEqual(perception.last_frame.shape, (HEIGHT, WIDTH, 3))
+
+
     def test_still_palm_gives_stop(self):
         perception, events = run_perception(lambda t: [as_landmarks(fake_hand())], 2)
         self.assertEqual([e for e, _ in events], ["STOP"])
@@ -384,7 +389,8 @@ class TestGesturePerception(unittest.TestCase):
 
     def test_no_wave_right_after_another_gesture(self):
         hands_at = lambda t: [as_landmarks(beckoning(t) if t < 1.0 else waving(t))]
-        _, events = run_perception(hands_at, 4, lambda t: BACK if t < 1.0 else PALM)
+        seconds = 3 + p.AFTER_GESTURE_QUIET_SEC  # long enough for a WAVE after the quiet time
+        _, events = run_perception(hands_at, seconds, lambda t: BACK if t < 1.0 else PALM)
         (come, t_come), (wave, t_wave) = events[:2]
         self.assertEqual((come, wave), ("COME", "WAVE"))
         self.assertGreaterEqual(t_wave - t_come, p.AFTER_GESTURE_QUIET_SEC)

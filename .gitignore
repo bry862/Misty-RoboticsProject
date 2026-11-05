@@ -8,3 +8,7 @@ venv/
 
 # Editor settings (each person's VS Code setup is different)
 .vscode/
+
+# Personal data: saved face data and camera snapshots of real people
+*.pkl
+debug_frame.jpg

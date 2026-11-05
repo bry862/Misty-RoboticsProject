@@ -8,7 +8,7 @@ source venv/bin/activate (- You need a python enviroment)
 pip install -r requirements.txt
 
 
-python main.py
+python main.py --ip <misty-ip>
 
 
 Plain instructions

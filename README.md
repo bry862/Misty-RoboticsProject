@@ -7,9 +7,9 @@ Misty uses its camera and built-in sensors to perceive its surroundings: whether
 ## Team Members
 | Name               | GitHub Handle | Contribution              | 
 |--------------------|---------------|---------------------------|
-| Angelina Kovalchuk | @Angelinakoval | |
-| Anna Muravyeva     | @AnnaMuravyeva | |
-| Brayhan Morrovel   | @bry862| |
+| Angelina Kovalchuk | @Angelinakoval | Gesture perception (STOP, WAVE, COME, GO_AWAY), combined demo |
+| Anna Muravyeva     | @AnnaMuravyeva | Pet personality and touch interactions |
+| Brayhan Morrovel   | @bry862| Face recognition and head tracking |
 | Calvin Lin         | @lincalvin76 | |
 | Elion Prelvukaj    | @Prelvukajelion | |
 
@@ -28,6 +28,26 @@ We are not trying to build a robot that replaces a real pet. Instead, we are exp
 **Context.** Misty is intended for shared campus spaces like a lab, lounge, or hallway. Interactions are brief: a person approaches, Misty notices them, and it responds based on current conditions. Because the setting is shared and public, Misty's behavior must be non-disruptive, non-intrusive, and safe, and it must respect personal space.
 
 ## Requirements
+**Functional requirements**
+
+| # | Misty must... |
+|---|---------------|
+| F1 | Detect a person's face and turn her head to look at the closest person within about 1 m |
+| F2 | Remember people she has seen before and recognize them again |
+| F3 | Recognize four hand gestures: STOP, WAVE, COME and GO_AWAY |
+| F4 | React to each gesture: stop (STOP), greet (WAVE), drive toward the person while keeping eye contact (COME), back up, say goodbye and turn around (GO_AWAY) |
+| F5 | React to head and chin pats with pet-like behaviors: speech, lights, and movement |
+
+**Non-functional requirements**
+
+| # | Requirement |
+|---|-------------|
+| N1 | **Safety.** STOP halts driving and head movement right away. The one exception is GO_AWAY, a short back-up and turn that always finishes. Misty never keeps driving after the program closes |
+| N2 | **Responsiveness.** Face recognition runs in the background, so it never delays reacting to a gesture |
+| N3 | **Not pestering.** The same gesture can't trigger again within 4 seconds, and a wave can't interrupt a movement that is still happening |
+| N4 | **Respect for space.** Misty only follows faces within about 1 m, unless the person calls her over with COME |
+| N5 | **Privacy.** Saved face data stays on the laptop and is never uploaded to the repository |
+| N6 | **Robustness.** If face recognition can't load, Misty still responds to gestures and pats |
 
 
 ## System Architecture
@@ -40,18 +60,49 @@ IDLE → NOTICED (face seen) → ENGAGED (tracking the person) → REACT (gestur
 
 Any state can move to `STOPPED` when the raised-palm gesture or a safety sensor is triggered. The `COOLDOWN` state keeps Misty from pestering the same person.
 
+**Components**
+
+| Folder | What it does |
+|--------|--------------|
+| `MistySkills/GesturePreception` | Finds the hand in each camera frame (MediaPipe) and recognizes STOP, WAVE, COME and GO_AWAY |
+| `MistySkills/Greeting` | Recognizes faces (InsightFace), remembers new people and turns Misty's head toward the closest face |
+| `MistySkills/PetInteractions` | Picks a pet-like reaction when Misty's head or chin is touched |
+| `MistySkills/gesture_demo.py` | Runs all three together on one camera stream and sends Misty her reactions |
+| `tests` | Automated tests for gesture recognition |
+
 
 ## Planned Capabilities by Checkpoint
 | Checkpoint | Focus |
 |------------|-------|
 | 1 (Oct 15) | Face detection and head tracking, pet reactions, wave and stop gestures, safety stop |
-| 2 (Nov 5) | Following a person at a safe distance, "point to go" gesture, mapping and navigation |
-| 3 (Nov 24) | User testing with Hunter students, refined reactions, responsible-design review |
-| Final | Integrated companion behavior and full evaluation |
+| 2 (Nov 5) | COME and GO_AWAY gestures, eye contact while Misty drives toward a person, goodbye and turn-around on GO_AWAY, face tracking and gestures on one camera stream |
+| 3 (Nov 24) | Stopping at a safe distance from the person, user testing with Hunter students, refined reactions, responsible-design review |
+| Final | Mapping and navigation, integrated companion behavior and full evaluation |
 
 
 ## Setup and Running
 **Requirements**
 - Misty II on the same Wi-Fi network as the laptop
 - Python 3.10 or newer
+
+**Install** (once, from the project folder)
+```
+pip install -r requirements.txt
+```
+
+**Run the demo** (from the `MistySkills` folder)
+```
+python gesture_demo.py --ip <misty-ip>                # Misty's camera, all features
+python gesture_demo.py --ip <misty-ip> --no-faces     # without face tracking
+python gesture_demo.py --ip <misty-ip> --webcam       # laptop webcam, Misty still reacts
+python gesture_demo.py --webcam --no-robot            # no robot: just prints the gestures it sees
+```
+In the video window, press `h` for a head pat, `c` for a chin pat, or `q` to quit.
+
+**Run the tests** (from `MistySkills/GesturePreception`)
+```
+python -m unittest discover -s ../../tests -t ../..
+```
+
+**Privacy:** Misty saves the faces she sees to `MistySkills/Greeting/known_faces.pkl` so she can recognize people again. This file stays on the laptop and is never uploaded to GitHub. Delete it to make her forget everyone.
 

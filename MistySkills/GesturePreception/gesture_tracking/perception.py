@@ -25,12 +25,12 @@ STOP_MAX_MOVE = 0.15       # how far the palm may drift while held, in hand size
 
 # WAVE (open hand moving side to side)
 WAVE_WINDOW_SEC = 2.0      # how much palm history to keep
-WAVE_MIN_SWINGS = 3        # direction changes needed (3 = right-left-right-left; 2 let hand repositioning count)
+WAVE_MIN_SWINGS = 4        # direction changes needed (3 = right-left-right-left; 2 let hand repositioning count)
 WAVE_MIN_MOVE = 0.4        # smallest move that counts as a swing, in hand sizes
 WAVE_MAX_GAP_SEC = 0.3     # if the hand stops looking open for longer than this, the wave starts over
 WAVE_TURN_FRAMES = 2       # frames in a row showing the other side of the hand before it counts as turned around
-GESTURE_COOLDOWN_SEC = 2.0 # quiet time after a WAVE, COME or GO_AWAY before the same gesture can fire again
-AFTER_GESTURE_QUIET_SEC = 1.0  # after any gesture, WAVE/COME/GO_AWAY can't build up while the hand moves to its next pose (STOP still can)
+GESTURE_COOLDOWN_SEC = 4.0 # quiet time after a WAVE, COME or GO_AWAY before the same gesture can fire again
+AFTER_GESTURE_QUIET_SEC = 2.0  # after any gesture, WAVE/COME/GO_AWAY can't build up while the hand moves to its next pose (STOP still can)
 
 # COME and GO_AWAY (hand bending at the wrist and back). Which way the fingers
 FLICK_WINDOW_SEC = 1.5     # how much reach history to keep
@@ -366,12 +366,14 @@ class GesturePerception:
         p = GesturePerception(source=0, show=True)
         event = p.poll()   # "WAVE", "STOP", "COME", "GO_AWAY" or None, called once per loop
         key = p.last_key   # key pressed in the video window, e.g. "f", or None
+        frame = p.last_frame  # newest camera frame, without drawings (for face tracking)
         p.close()
     """
 
     def __init__(self, source=0, show=True, tracker=None, rotate=None):
         self.show = show
-        self.last_key = None 
+        self.last_key = None
+        self.last_frame = None
         self.last_event = None
         self.last_event_time = None
         self.tracker = tracker or HandTracker(source, rotate)
@@ -387,6 +389,7 @@ class GesturePerception:
         self.last_key = None
         if frame is None:
             return None
+        self.last_frame = frame.copy()  # copy: draw() paints on frame
         now = time.monotonic()
         height, width = frame.shape[:2]
 

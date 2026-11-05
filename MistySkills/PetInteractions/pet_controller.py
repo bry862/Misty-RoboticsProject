@@ -1,6 +1,5 @@
 from pet_personality import PetPersonality
 import time
-import requests
 
 class PetController:
     def __init__(self, misty=None):
@@ -22,34 +21,27 @@ class PetController:
         if self.misty is None:
             return
 
-        #Send commands using MistyClient
-        self.misty.say(reaction["message"])
+        #Send commands using the SDK robot inside MistyClient
+        robot = self.misty.robot
+        robot.speak(text=reaction["message"])
 
         if reaction["emotion"] == "happy":
-            self.misty.display_image("e_Joy.jpg")
-            self.misty.move_head(-10, 0, 0, 50)
+            robot.display_image(fileName="e_Joy.jpg")
+            robot.move_head(pitch=-10, roll=0, yaw=0, velocity=50)
 
         elif reaction["emotion"] == "curious":
-            self.misty.display_image("e_Admiration.jpg")
-            self.misty.move_head(0, 15, 0, 40)
-        
+            robot.display_image(fileName="e_Admiration.jpg")
+            robot.move_head(pitch=0, roll=15, yaw=0, velocity=40)
+
         elif reaction["emotion"] == "excited":
-            response = requests.post(
-                f"{self.misty.base_url}/actions/start",
-                json={"Name": "walk-happy"},
-                timeout=10
-            )
+            response = robot.start_action(name="walk-happy")
             response.raise_for_status()
             print("Happy dance triggered!")
 
             #Dance finishes --> reset body to neutral
             time.sleep(2)
 
-            response = requests.post(
-                f"{self.misty.base_url}/actions/start",
-                json={"Name": "body-reset"},
-                timeout=5
-            )
+            response = robot.start_action(name="body-reset")
             response.raise_for_status()
             print("Misty returned to neutral!")
   

@@ -2,7 +2,9 @@ import random
 import time
 
 class PetPersonality:
-    def __init__(self, cooldown=3):
+    def __init__(self, cooldown=3, responder=None):
+        #Optional LLMResponder; presets are used when it is None or fails
+        self.responder = responder
         #Min seconds between reactions
         self.cooldown = cooldown
         self.last_reaction = 0
@@ -89,13 +91,21 @@ class PetPersonality:
                 }
 
         
-        #Don't repeat the same reaction twice in a row
-        available = [
-            reaction for reaction in self.reactions[location]
-            if reaction["message"] != self.last_reaction_message
-        ]
+        #Try the LLM first; fall back to presets if it is missing or fails
+        reaction = None
+        if self.responder is not None:
+            reaction = self.responder.get_reaction(location, {
+                "head_pat_count": self.head_pat_count,
+                "last_message": self.last_reaction_message,
+            })
 
-        reaction = random.choice(available)
+        if reaction is None:
+            #Don't repeat the same reaction twice in a row
+            available = [
+                r for r in self.reactions[location]
+                if r["message"] != self.last_reaction_message
+            ]
+            reaction = random.choice(available)
         self.last_reaction_message = reaction["message"]
         self.last_reaction = current_time
 

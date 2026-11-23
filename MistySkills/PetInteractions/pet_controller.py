@@ -1,11 +1,15 @@
 from pet_personality import PetPersonality
+from llm_responder import LLMResponder
 import time
 import requests
 
 class PetController:
-    def __init__(self, misty=None):
+    def __init__(self, misty=None, use_llm=False):
         self.misty = misty
-        self.personality = PetPersonality()
+        #use_llm needs a local Ollama server; if it is unreachable,
+        #the personality silently falls back to its preset reactions
+        responder = LLMResponder() if use_llm else None
+        self.personality = PetPersonality(responder=responder)
 
     def handle_touch(self, location):
         reaction = self.personality.react_to_touch(location)
@@ -56,7 +60,9 @@ class PetController:
 
 
 if __name__ == "__main__":
-    controller = PetController()
+    import sys
+
+    controller = PetController(use_llm="--llm" in sys.argv)
 
     controller.handle_touch("head")
     controller.handle_touch("head")

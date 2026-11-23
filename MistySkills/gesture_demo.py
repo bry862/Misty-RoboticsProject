@@ -21,6 +21,7 @@ import os
 import sys
 import threading
 import time
+import random
 from pathlib import Path
 
 import cv2
@@ -52,6 +53,26 @@ HEAD_UP = -25
 HEAD_DOWN = 15
 HEAD_RESET_SEC = 2.0
 REQUEST_TIMEOUT_SEC = 3
+
+SPIN_SPEED = 60       
+SPIN_TIME_MS = 9300  
+
+# --- Idle behavior settings ---
+IDLE_AFTER_SEC = 6.0           # quiet time after any reaction before idling starts
+IDLE_MIN_GAP_SEC = 3.0         # random pause between idle moves
+IDLE_MAX_GAP_SEC = 7.0
+IDLE_YAW_RANGE = 40            # how far Misty looks left/right, degrees
+IDLE_PITCH_RANGE = (-12, 8)    # up/down glance range, degrees
+IDLE_LED = (80, 80, 255)       # calm idle color
+
+BUSY_SEC = {
+    "STOP": 0.5,
+    "WAVE": 2.5,
+    "COME": COME_TIME_MS / 1000 + 0.5,
+    "GO_AWAY": GO_AWAY_TIME_MS / 1000 + HEAD_RESET_SEC + 1.0,
+    "TWIRL": SPIN_TIME_MS / 1000 + 0.5,
+    "PET": 3.0,
+}
 
 
 # --- Pet reaction settings ---
@@ -87,7 +108,7 @@ def greet(misty):
     """WAVE: green LED, raise the right arm and say hi; the arm lowers after 2 s."""
     check(misty.change_led(red=0, green=255, blue=0))
     check(misty.move_arms(rightArmPosition=ARM_UP, rightArmVelocity=80))
-    check(misty.speak(text="Hi! I'm Misty! How are you doing today?"))
+    #check(misty.speak(text="Hi! I'm Misty! How are you doing today?"))
     threading.Timer(2.0, lambda: misty.move_arms(rightArmPosition=ARM_DOWN, rightArmVelocity=50)).start()
 
 
@@ -123,9 +144,11 @@ def go_away(misty):
     head_reset.start()
 
 
-def react(misty, event):
+def react(misty, event, idle=None):
     """Send Misty the reaction for one gesture."""
-    if event in ("STOP", "COME", "GO_AWAY"):
+    if idle:
+        idle.notify_activity(BUSY_SEC.get(event, 2.0))
+    if event in ("STOP", "COME", "GO_AWAY", "TWIRL"):
         cancel_head_reset()
     if event == "STOP":
         check(misty.stop())
@@ -136,6 +159,63 @@ def react(misty, event):
         come_forward(misty)
     elif event == "GO_AWAY":
         go_away(misty)
+    elif event == "TWIRL":
+        spin(misty)
+
+def spin(misty):
+    """TWIRL: purple LED, spin in place."""
+    check(misty.change_led(red=160, green=32, blue=240))
+    check(misty.drive_time(linearVelocity=0, angularVelocity=SPIN_SPEED, timeMs=SPIN_TIME_MS))
+
+class IdleBehavior:
+    """When nothing has happened for a while, Misty looks around and fidgets."""
+
+    def __init__(self, misty):
+        self.misty = misty
+        self.quiet_until = time.monotonic() + IDLE_AFTER_SEC
+        self.next_move = 0.0
+        self.idling = False
+        self.head_off_center = False
+
+    def notify_activity(self, busy_sec):
+        """Call whenever a gesture or pet reaction starts; pauses idle for a while."""
+        self.quiet_until = time.monotonic() + busy_sec + IDLE_AFTER_SEC
+        if self.idling:
+            self.idling = False
+            if self.head_off_center:
+                self.head_off_center = False
+                move_head(self.misty, HEAD_LEVEL, 0.8)  # don't start a reaction while looking sideways
+
+    def tick(self):
+        """Call once per main-loop pass. Does one small movement every few seconds."""
+        now = time.monotonic()
+        if now < self.quiet_until:
+            return
+        if not self.idling:
+            self.idling = True
+            self.next_move = now
+            check(self.misty.change_led(*IDLE_LED))
+        if now < self.next_move:
+            return
+        self.next_move = now + random.uniform(IDLE_MIN_GAP_SEC, IDLE_MAX_GAP_SEC)
+        random.choice([self.look_around, self.look_around, self.glance_up, self.fidget_arm])()
+
+    def look_around(self):
+        yaw = random.uniform(-IDLE_YAW_RANGE, IDLE_YAW_RANGE)
+        pitch = random.uniform(*IDLE_PITCH_RANGE)
+        self.head_off_center = True
+        check(self.misty.move_head(pitch=pitch, roll=0, yaw=yaw,
+                                   duration=random.uniform(2.5, 4.0), units="degrees"))
+
+    def glance_up(self):
+        self.head_off_center = True
+        check(self.misty.move_head(pitch=HEAD_UP, roll=random.uniform(-10, 10), yaw=0,
+                                   duration=1.5, units="degrees"))
+
+    def fidget_arm(self):
+        check(self.misty.move_arms(rightArmPosition=12, rightArmVelocity=30))
+        threading.Timer(1.2, lambda: self.misty.move_arms(
+            rightArmPosition=60, rightArmVelocity=30)).start()
 
 
 class PetReactions:
@@ -144,14 +224,17 @@ class PetReactions:
     Has a handle_touch(location) method so TouchListener can drive it directly.
     """
 
-    def __init__(self, misty):
+    def __init__(self, misty, idle=None):
         self.misty = misty                # None = only print reactions
+        self.idle = idle
         self.personality = PetPersonality()
 
     def handle_touch(self, location):
         reaction = self.personality.react_to_touch(location)
         if reaction is None:
             return  # still cooling down from the last reaction
+        if self.idle:
+            self.idle.notify_activity(BUSY_SEC["PET"])
         print(f"PET {location}: {reaction['emotion']} -> \"{reaction['message']}\" ({reaction['action']})")
         if self.misty:
             try:
@@ -230,12 +313,20 @@ def main():
     if misty:
         start_touch_sensors(misty, pet)
 
+    idle = IdleBehavior(misty) if misty else None
+    pet = PetReactions(misty, idle)
+
     perception = open_perception(source, rotate=None if args.webcam else CAMERA_ROTATION)
     print("Ready. Show a gesture (STOP, WAVE, COME, GO_AWAY) or pet Misty's head/chin.")
     print("Keys in the video window: h = head pat, c = chin pat, q = quit.")
     try:
         while perception.last_key != "q":
             event = perception.poll()
+            if idle:
+                try:
+                    idle.tick()
+                except requests.RequestException as error:
+                    print(f" Misty didn't respond: {error}")
             if perception.last_key == "h":
                 pet.handle_touch("head")
             elif perception.last_key == "c":
@@ -245,7 +336,7 @@ def main():
             print(event)
             if misty:
                 try:
-                    react(misty, event)
+                    react(misty, event, idle)
                 except requests.RequestException as error:
                     print(f"  Misty didn't respond: {error}")  # keep going, don't crash the demo
     finally:

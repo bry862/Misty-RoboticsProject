@@ -40,12 +40,22 @@ FLICK_MAX_DRIFT = 1.0      # how far the palm may slide sideways meanwhile, in p
 FLICK_MIN_DIRECTION_SHARE = 0.6  # share of frames in the window where the fingers must point the right way
 FLICK_MIN_PALM_WIDTH = 0.4 # knuckles narrower than this (in hand sizes) mean the hand is turning over: the flick starts over
 
+# TWIRL (index finger drawing circles while the other fingers are curled)
+TWIRL_WINDOW_SEC = 1.5      # how much fingertip history to keep
+TWIRL_MIN_TURN_DEG = 220    # total angle the fingertip must sweep (360 = one full circle)
+TWIRL_MIN_RADIUS = 0.15     # smallest circle that counts, in hand sizes (ignores jitter)
+TWIRL_MAX_RADIUS = 1.5      # largest circle that counts, in hand sizes (ignores arm swings)
+TWIRL_MIN_POINTS = 10       # minimum frames of history before judging
+TWIRL_MAX_GAP_SEC = 0.3     # if the pointing pose is lost longer than this, start over
+
 # Landmark indices
 WRIST = 0
 INDEX_KNUCKLE = 5
 MIDDLE_KNUCKLE = 9
 MIDDLE_TIP = 12
 PINKY_KNUCKLE = 17
+INDEX_TIP = 8
+CURLED_FINGERS = [(12, 10), (16, 14), (20, 18)]   # (tip, middle joint): middle, ring, pinky
 FINGERS = [(8, 6), (12, 10), (16, 14), (20, 18)]  # (tip, middle joint): index, middle, ring, pinky
 FINGERTIPS = [8, 12, 16, 20]                      # index, middle, ring, pinky
 KNUCKLES = [5, 9, 13, 17]                         # the bases of those fingers
@@ -286,6 +296,60 @@ class GoAwayDetector(FlickDetector):
     def __init__(self):
         super().__init__(fingers_down=True)
 
+def is_pointing(points):
+    """True if the index finger is stretched out and the other three are curled."""
+    wrist = points[WRIST]
+    index_out = math.dist(wrist, points[INDEX_TIP]) > math.dist(wrist, points[6])
+    others_curled = all(math.dist(wrist, points[tip]) < math.dist(wrist, points[joint])
+                        for tip, joint in CURLED_FINGERS)
+    return index_out and others_curled
+
+
+class TwirlDetector:
+    """Fires when the index fingertip sweeps about a full circle within TWIRL_WINDOW_SEC."""
+
+    def __init__(self):
+        self.history = deque()     # (time, fingertip x, fingertip y)
+        self.cooldown_until = 0.0
+
+    def reset(self):
+        """Forget the twirl in progress."""
+        self.history.clear()
+
+    def update(self, points, now):
+        """Feed one frame's hand (or None). Returns True on the frame the gesture fires."""
+        if now < self.cooldown_until:
+            return False
+        if points is None or not is_pointing(points):
+            if self.history and now - self.history[-1][0] > TWIRL_MAX_GAP_SEC:
+                self.reset()
+            return False
+
+        self.history.append((now, *points[INDEX_TIP]))
+        while self.history and now - self.history[0][0] > TWIRL_WINDOW_SEC:
+            self.history.popleft()
+        if len(self.history) < TWIRL_MIN_POINTS:
+            return False
+
+        cx = sum(x for _, x, _ in self.history) / len(self.history)
+        cy = sum(y for _, _, y in self.history) / len(self.history)
+        radius = sum(math.hypot(x - cx, y - cy) for _, x, y in self.history) / len(self.history)
+        size = hand_size(points)
+        if not (TWIRL_MIN_RADIUS * size <= radius <= TWIRL_MAX_RADIUS * size):
+            return False
+
+        total = 0.0   # signed angle swept around the centre
+        prev = math.atan2(self.history[0][2] - cy, self.history[0][1] - cx)
+        for _, x, y in list(self.history)[1:]:
+            angle = math.atan2(y - cy, x - cx)
+            total += (angle - prev + math.pi) % (2 * math.pi) - math.pi  # wrap to -pi..pi
+            prev = angle
+
+        if abs(total) >= math.radians(TWIRL_MIN_TURN_DEG):
+            self.history.clear()
+            self.cooldown_until = now + GESTURE_COOLDOWN_SEC
+            return True
+        return False
 
 class HandTracker:
     """Reads frames from a camera and finds the hands in each one"""
@@ -378,6 +442,7 @@ class GesturePerception:
         self.stop_detector = StopDetector()
         self.wave_detector = WaveDetector()
         self.come_detector = ComeDetector()
+        self.twirl_detector = TwirlDetector()
         self.go_away_detector = GoAwayDetector()
         self.quiet_until = 0.0
 
@@ -396,7 +461,7 @@ class GesturePerception:
         palm = palm_faces_camera(points, label) if points else None
 
 
-        movers = (self.wave_detector, self.come_detector, self.go_away_detector)
+        movers = (self.wave_detector, self.come_detector, self.go_away_detector, self.twirl_detector)
         if now < self.quiet_until:
             for detector in movers:
                 detector.reset()
@@ -405,8 +470,9 @@ class GesturePerception:
         wave = self.wave_detector.update(points, now, palm)
         come = self.come_detector.update(points, now)
         go_away = self.go_away_detector.update(points, now)
+        twirl = self.twirl_detector.update(points, now) 
         event = ("STOP" if stop else "WAVE" if wave else "COME" if come
-                 else "GO_AWAY" if go_away else None)
+                 else "GO_AWAY" if go_away else "TWIRL" if twirl else None)
         if event:
             self.last_event, self.last_event_time = event, now
             self.quiet_until = now + AFTER_GESTURE_QUIET_SEC
